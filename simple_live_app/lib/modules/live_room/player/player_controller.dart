@@ -33,8 +33,23 @@ mixin PlayerMixin {
       logLevel: AppSettingsController.instance.logEnable.value
           ? MPVLogLevel.info
           : MPVLogLevel.error,
+      
+      // 关键修改：添加缓冲区配置
+      demuxerMaxBytes: AppSettingsController.instance.playerBufferSize.value * 1024 * 1024, // 转换为字节
+      demuxerReadaheadSecs: (AppSettingsController.instance.playerBufferSize.value / 16).toDouble(), // 根据缓冲区大小计算预读时间
+      
+      // 网络缓冲优化 - 针对直播流
+      networkTimeout: 30, // 30秒网络超时
+      bufferSize: AppSettingsController.instance.playerBufferSize.value * 1024 * 1024, // 播放器内部缓冲区
+      cacheDefault: AppSettingsController.instance.playerBufferSize.value * 1024, // 默认缓存大小(KB)
+      cacheSecs: (AppSettingsController.instance.playerBufferSize.value / 8).toDouble(), // 缓存秒数
+      
+      // 针对你的LG设备的额外优化
+      demuxerLavfProbesize: 1024 * 1024, // 1MB探测大小
+      demuxerLavfAnalyzeduration: 2000000, // 2秒分析时间
     ),
   );
+  
   /// 初始化播放器并设置 ao 参数
   Future<void> initializePlayer() async {
     // 设置音频输出驱动
@@ -44,6 +59,54 @@ mixin PlayerMixin {
           'ao',
           AppSettingsController.instance.audioOutputDriver.value,
         );
+      }
+    }
+    
+    // 添加缓冲区相关的播放器属性设置
+    if (player.platform is NativePlayer) {
+      try {
+        var bufferSizeMB = AppSettingsController.instance.playerBufferSize.value;
+        
+        // 设置网络缓冲大小 (KB)
+        await (player.platform as dynamic).setProperty(
+          'cache-default', 
+          '${bufferSizeMB * 1024}'
+        );
+        
+        // 设置预读缓冲时间
+        await (player.platform as dynamic).setProperty(
+          'demuxer-readahead-secs', 
+          '${(bufferSizeMB / 16).toDouble()}'
+        );
+        
+        // 设置最大缓冲字节数
+        await (player.platform as dynamic).setProperty(
+          'demuxer-max-bytes', 
+          '${bufferSizeMB * 1024 * 1024}'
+        );
+        
+        // 针对直播流的优化设置
+        await (player.platform as dynamic).setProperty('cache-secs', '60'); // 60秒缓存
+        await (player.platform as dynamic).setProperty('cache-pause-initial', 'yes'); // 初始缓冲暂停
+        await (player.platform as dynamic).setProperty('cache-pause-restart', 'yes'); // 缓冲不足时暂停
+        
+        // 针对H.264流的优化（基于你之前的MX播放器信息）
+        await (player.platform as dynamic).setProperty('video-sync', 'audio'); // 视频同步到音频
+        await (player.platform as dynamic).setProperty('framedrop', 'yes'); // 允许丢帧
+        
+        // 网络流优化
+        await (player.platform as dynamic).setProperty('stream-buffer-size', '${bufferSizeMB * 1024}'); // 流缓冲区
+        await (player.platform as dynamic).setProperty('network-timeout', '30'); // 网络超时
+        
+        // 针对LG设备的特殊优化
+        if (Platform.isAndroid) {
+          await (player.platform as dynamic).setProperty('opengl-swapinterval', '1'); // 垂直同步
+          await (player.platform as dynamic).setProperty('video-latency-hacks', 'yes'); // 减少延迟
+        }
+        
+        Log.d("缓冲区设置已应用: ${bufferSizeMB}MB, 预读时间: ${(bufferSizeMB / 16).toDouble()}秒");
+      } catch (e) {
+        Log.w("设置缓冲区属性失败: $e");
       }
     }
   }
@@ -180,6 +243,7 @@ mixin PlayerStateMixin on PlayerMixin {
     );
   }
 }
+
 mixin PlayerDanmakuMixin on PlayerStateMixin {
   /// 弹幕控制器
   DanmakuController? danmakuController;
@@ -215,6 +279,7 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
     danmakuController?.addItems(items);
   }
 }
+
 mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
 
@@ -462,6 +527,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     });
   }
 }
+
 mixin PlayerGestureControlMixin
     on PlayerStateMixin, PlayerMixin, PlayerSystemMixin {
   /// 单击显示/隐藏控制器
@@ -655,6 +721,10 @@ class PlayerController extends BaseController
   void onInit() {
     initSystem();
     initStream();
+    
+    // 关键修改：初始化播放器缓冲区设置
+    initializePlayer();
+    
     //设置音量
     player.setVolume(AppSettingsController.instance.playerVolume.value);
     super.onInit();
@@ -731,6 +801,17 @@ class PlayerController extends BaseController
       title: "播放信息",
       child: ListView(
         children: [
+          ListTile(
+            title: const Text("Buffer Size"),
+            subtitle: Text('${AppSettingsController.instance.playerBufferSize.value}MB'),
+            onTap: () {
+              Clipboard.setData(
+                ClipboardData(
+                  text: "Buffer Size\n${AppSettingsController.instance.playerBufferSize.value}MB",
+                ),
+              );
+            },
+          ),
           ListTile(
             title: const Text("Resolution"),
             subtitle: Text('${player.state.width}x${player.state.height}'),
