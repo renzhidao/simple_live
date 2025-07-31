@@ -103,6 +103,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var loadError = false.obs;
   Error? error;
 
+  /// 播放错误信息
+  var errorMsg = "".obs;
+
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
@@ -416,16 +419,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       playurl = playurl.replaceAll("http://", "https://");
     }
 
- // 初始化播放器并设置 ao 参数
-  await initializePlayer();
-
-  await player.open(
-    Media(
-      playurl,
-      httpHeaders: playHeaders,
-    ),
-  );
+    // 关键修改：移除多余的 initializePlayer() 调用
+    // initializePlayer() 已经在 PlayerController 的 onInit() 中调用过了
+    // 这里重复调用会干扰缓冲区设置
+    
+    await player.open(
+      Media(
+        playurl,
+        httpHeaders: playHeaders,
+      ),
+    );
     Log.d("播放链接\r\n：$playurl");
+    Log.d("当前缓冲区设置：${AppSettingsController.instance.playerBufferSize.value}MB");
   }
 
   @override
@@ -457,7 +462,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int mediaErrorRetryCount = 0;
   @override
   void mediaError(String error) async {
-    super.mediaEnd();
+    super.mediaError(error);
+    Log.w("播放错误: $error, 当前缓冲区: ${AppSettingsController.instance.playerBufferSize.value}MB");
+    
     if (mediaErrorRetryCount < 2) {
       Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
       if (mediaErrorRetryCount == 1) {
@@ -997,6 +1004,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void copyErrorDetail() {
     Utils.copyToClipboard('''直播平台：${rxSite.value.name}
 房间号：${rxRoomId.value}
+缓冲区设置：${AppSettingsController.instance.playerBufferSize.value}MB
 错误信息：
 ${error?.toString()}
 ----------------
