@@ -1,12 +1,7 @@
-name: Quick Build
+name: Foolproof APK Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-      - dev
 
 jobs:
   build:
@@ -23,13 +18,26 @@ jobs:
           flutter-version: '3.22.x'
           cache: true
       
-      - name: Build
+      - name: Build and Locate APK
         run: |
           cd simple_live_app
           flutter pub get
-          flutter build apk --release --target-platform android-arm64 --shrink
+          flutter build apk --release
+          
+          echo "🔍 搜索APK文件..."
+          find . -name "*.apk" -type f
+          
+          echo "📦 创建下载目录..."
+          mkdir -p ../download
+          
+          echo "📋 复制APK到下载目录..."
+          find . -name "*.apk" -type f -exec cp {} ../download/ \;
+          
+          echo "✅ 下载目录内容："
+          ls -la ../download/
       
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: simple-live-apk
-          path: simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          path: download/*.apk
