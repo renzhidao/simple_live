@@ -21,10 +21,8 @@ import 'package:tars_dart/tars/net/base_tars_http.dart';
 
 class HuyaSite implements LiveSite {
   final String kUserAgent =
-      "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36";
+      "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36 Edg/117.0.0.0";
   final BaseTarsHttp tupClient = BaseTarsHttp("http://wup.huya.com", "liveui");
-  
-  String? playUserAgent;
 
   @override
   String id = "huya";
@@ -97,7 +95,6 @@ class HuyaSite implements LiveSite {
         "gameId": category.id,
         "page": page
       },
-      header: {"user-agent": kUserAgent},
     );
     var result = json.decode(resultText);
     var items = <LiveRoomItem>[];
@@ -162,31 +159,11 @@ class HuyaSite implements LiveSite {
       var url = await getPlayUrl(line, quality.data["bitRate"]);
       ls.add(url);
     }
-    
-    // Get dynamic user agent
-    var userAgent = await getHuYaUA();
-    
+    // from stream-rec url:https://github.com/stream-rec/stream-rec
     return LivePlayUrl(
       urls: ls,
-      headers: {"user-agent": userAgent},
+      headers: {"user-agent": "HYSDK(Windows, 30000002)_APP(pc_exe&6070100&official)_SDK(trans&2.21.0.4784)"},
     );
-  }
-  
-  // Dynamic user agent fetching from pure_live
-  Future<String> getHuYaUA() async {
-    if (playUserAgent != null) {
-      return playUserAgent!;
-    }
-    try {
-      var result = await HttpClient.instance.getJson(
-        "https://github.iill.moe/xiaoyaocz/dart_simple_live/master/assets/play_config.json",
-        queryParameters: {"ts": DateTime.now().millisecondsSinceEpoch},
-      );
-      playUserAgent = json.decode(result)['huya']['user_agent'];
-    } catch (e) {
-      print("Failed to get dynamic UA: $e");
-    }
-    return playUserAgent ?? "HYSDK(Windows, 30000002)_APP(pc_exe&6080100&official)_SDK(trans&2.23.0.4969)";
   }
 
   Future<String> getPlayUrl(HuyaLineModel line, int bitRate) async {
@@ -195,14 +172,8 @@ class HuyaSite implements LiveSite {
     req.streamName = line.streamName;
     var resp =
         await tupClient.tupRequest("getCdnTokenInfo", req, GetCdnTokenResp());
-    
-    var url = '${line.line}/${resp.streamName}.flv?${resp.flvAntiCode}&codec=264';
-    
-    // Support HLS format
-    if (line.lineType == HuyaLineType.hls) {
-      url = '${line.line}/${resp.streamName}.m3u8?${resp.hlsAntiCode}&codec=264';
-    }
-    
+    var url =
+        '${line.line}/${resp.streamName}.flv?${resp.flvAntiCode}&codec=264';
     if (bitRate > 0) {
       url += "&ratio=$bitRate";
     }
@@ -218,11 +189,6 @@ class HuyaSite implements LiveSite {
         "do": "getLiveListByPage",
         "tagAll": 0,
         "page": page
-      },
-      header: {
-        "user-agent": kUserAgent,
-        "Origin": "https://www.huya.com",
-        "Referer": "https://www.huya.com/",
       },
     );
     var result = json.decode(resultText);
@@ -252,138 +218,6 @@ class HuyaSite implements LiveSite {
 
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
-    // Try the new API endpoint first
-    try {
-      return await _getRoomDetailNew(roomId);
-    } catch (e) {
-      print("New API failed, falling back to old API: $e");
-      // Fallback to old method
-      return await _getRoomDetailOld(roomId);
-    }
-  }
-  
-  Future<LiveRoomDetail> _getRoomDetailNew({required String roomId}) async {
-    var resultText = await HttpClient.instance.getText(
-      'https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid=$roomId&showSecret=1',
-      header: {
-        'Accept': '*/*',
-        'Origin': 'https://www.huya.com',
-        'Referer': 'https://www.huya.com/',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-site',
-        "user-agent": kUserAgent,
-      },
-    );
-    
-    var result = json.decode(resultText);
-    if (result['status'] == 200 && result['data']['stream'] != null) {
-      dynamic data = result['data'];
-      var topSid = 0;
-      var subSid = 0;
-      var huyaLines = <HuyaLineModel>[];
-      var huyaBiterates = <HuyaBitRateModel>[];
-      
-      var baseSteamInfoList = data['stream']['baseSteamInfoList'] as List<dynamic>;
-      var flvLines = data['stream']['flv']['multiLine'];
-      var hlsLines = data['stream']['hls']['multiLine'];
-      
-      // Process FLV lines
-      for (var item in flvLines) {
-        if ((item["url"]?.toString() ?? "").isNotEmpty) {
-          var currentStream = baseSteamInfoList.firstWhere(
-            (element) => element["sCdnType"] == item["cdnType"],
-            orElse: () => null,
-          );
-          if (currentStream != null) {
-            topSid = currentStream["lChannelId"];
-            subSid = currentStream["lSubChannelId"];
-            huyaLines.add(
-              HuyaLineModel(
-                line: currentStream['sFlvUrl'],
-                lineType: HuyaLineType.flv,
-                flvAntiCode: currentStream["sFlvAntiCode"].toString(),
-                hlsAntiCode: currentStream["sHlsAntiCode"].toString(),
-                streamName: currentStream["sStreamName"].toString(),
-                cdnType: currentStream["sCdnType"].toString(),
-              ),
-            );
-          }
-        }
-      }
-      
-      // Process HLS lines
-      for (var item in hlsLines) {
-        if ((item["url"]?.toString() ?? "").isNotEmpty) {
-          var currentStream = baseSteamInfoList.firstWhere(
-            (element) => element["sCdnType"] == item["cdnType"],
-            orElse: () => null,
-          );
-          if (currentStream != null) {
-            huyaLines.add(
-              HuyaLineModel(
-                line: currentStream['sHlsUrl'],
-                lineType: HuyaLineType.hls,
-                flvAntiCode: currentStream["sFlvAntiCode"].toString(),
-                hlsAntiCode: currentStream["sHlsAntiCode"].toString(),
-                streamName: currentStream["sStreamName"].toString(),
-                cdnType: currentStream["sCdnType"].toString(),
-              ),
-            );
-          }
-        }
-      }
-      
-      // Process bitrates
-      var vMultiStreamInfo = data['stream']['vMultiStreamInfo'] ?? [];
-      for (var item in vMultiStreamInfo) {
-        var name = item["sDisplayName"].toString();
-        if (!name.contains("HDR")) {
-          huyaBiterates.add(HuyaBitRateModel(
-            bitRate: item["iBitRate"],
-            name: name,
-          ));
-        }
-      }
-      
-      if (huyaBiterates.isEmpty) {
-        huyaBiterates = [
-          HuyaBitRateModel(name: "原画", bitRate: 0),
-          HuyaBitRateModel(name: "高清", bitRate: 2000),
-        ];
-      }
-      
-      var liveData = data['liveData'];
-      
-      return LiveRoomDetail(
-        cover: liveData["screenshot"].toString(),
-        online: liveData["totalCount"] ?? 0,
-        roomId: roomId,
-        title: liveData["introduction"]?.toString() ?? liveData["roomName"]?.toString() ?? "",
-        userName: liveData["nick"].toString(),
-        userAvatar: liveData["avatar180"].toString(),
-        introduction: liveData["introduction"]?.toString() ?? "",
-        notice: data["welcomeText"]?.toString() ?? "",
-        status: data['realLiveStatus'] == 'ON',
-        data: HuyaUrlDataModel(
-          url: "",
-          lines: huyaLines,
-          bitRates: huyaBiterates,
-          uid: getUid(t: 13, e: 10),
-        ),
-        danmakuData: HuyaDanmakuArgs(
-          ayyuid: liveData["yyid"] ?? 0,
-          topSid: topSid,
-          subSid: subSid,
-        ),
-        url: "https://www.huya.com/$roomId",
-      );
-    }
-    
-    throw Exception("Failed to get room detail from new API");
-  }
-
-  Future<LiveRoomDetail> _getRoomDetailOld({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
     var tLiveInfo = roomInfo["roomInfo"]["tLiveInfo"];
     var tProfileInfo = roomInfo["roomInfo"]["tProfileInfo"];
@@ -401,17 +235,6 @@ class HuyaSite implements LiveSite {
         huyaLines.add(HuyaLineModel(
           line: item["sFlvUrl"].toString(),
           lineType: HuyaLineType.flv,
-          flvAntiCode: item["sFlvAntiCode"].toString(),
-          hlsAntiCode: item["sHlsAntiCode"].toString(),
-          streamName: item["sStreamName"].toString(),
-          cdnType: item["sCdnType"].toString(),
-        ));
-      }
-      // Add HLS support
-      if ((item["sHlsUrl"]?.toString() ?? "").isNotEmpty) {
-        huyaLines.add(HuyaLineModel(
-          line: item["sHlsUrl"].toString(),
-          lineType: HuyaLineType.hls,
           flvAntiCode: item["sFlvAntiCode"].toString(),
           hlsAntiCode: item["sHlsAntiCode"].toString(),
           streamName: item["sStreamName"].toString(),
@@ -571,29 +394,8 @@ class HuyaSite implements LiveSite {
 
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
-    try {
-      // Try new API first
-      var resultText = await HttpClient.instance.getText(
-        'https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid=$roomId&showSecret=1',
-        header: {
-          'Accept': '*/*',
-          'Origin': 'https://www.huya.com',
-          'Referer': 'https://www.huya.com/',
-          "user-agent": kUserAgent,
-        },
-      );
-      
-      var result = json.decode(resultText);
-      if (result['status'] == 200 && result['data'] != null) {
-        return result['data']['realLiveStatus'] == 'ON';
-      }
-    } catch (e) {
-      // Fallback to old method
-      var roomInfo = await _getRoomInfo(roomId);
-      return roomInfo["roomInfo"]["eLiveStatus"] == 2;
-    }
-    
-    return false;
+    var roomInfo = await _getRoomInfo(roomId);
+    return roomInfo["roomInfo"]["eLiveStatus"] == 2;
   }
 
   /// 匿名登录获取uid
@@ -679,7 +481,7 @@ class HuyaSite implements LiveSite {
       "uuid": getUUid(),
       "t": query["t"]!,
       "sv": "202411221719",
-      "sdk_sid": DateTime.now().millisecondsSinceEpoch.toString(),
+      "sdk_sid": "1732862566708",
       "a_block": "0"
     }).query;
   }
@@ -692,6 +494,7 @@ class HuyaSite implements LiveSite {
   }
 }
 
+// 其余类定义保持不变...
 class HuyaUrlDataModel {
   final String url;
   final String uid;
