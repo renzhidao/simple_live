@@ -33,24 +33,10 @@ mixin PlayerMixin {
       logLevel: AppSettingsController.instance.logEnable.value
           ? MPVLogLevel.info
           : MPVLogLevel.error,
-      
-      // 关键修改：添加缓冲区配置
-      demuxerMaxBytes: AppSettingsController.instance.playerBufferSize.value * 1024 * 1024, // 转换为字节
-      demuxerReadaheadSecs: (AppSettingsController.instance.playerBufferSize.value / 16).toDouble(), // 根据缓冲区大小计算预读时间
-      
-      // 网络缓冲优化 - 针对直播流
-      networkTimeout: 30, // 30秒网络超时
-      bufferSize: AppSettingsController.instance.playerBufferSize.value * 1024 * 1024, // 播放器内部缓冲区
-      cacheDefault: AppSettingsController.instance.playerBufferSize.value * 1024, // 默认缓存大小(KB)
-      cacheSecs: (AppSettingsController.instance.playerBufferSize.value / 8).toDouble(), // 缓存秒数
-      
-      // 针对你的LG设备的额外优化
-      demuxerLavfProbesize: 1024 * 1024, // 1MB探测大小
-      demuxerLavfAnalyzeduration: 2000000, // 2秒分析时间
     ),
   );
   
-  /// 初始化播放器并设置 ao 参数
+  /// 初始化播放器并设置 ao 参数和缓冲区
   Future<void> initializePlayer() async {
     // 设置音频输出驱动
     if (AppSettingsController.instance.customPlayerOutput.value) {
@@ -66,6 +52,8 @@ mixin PlayerMixin {
     if (player.platform is NativePlayer) {
       try {
         var bufferSizeMB = AppSettingsController.instance.playerBufferSize.value;
+        
+        Log.d("开始设置播放器缓冲区: ${bufferSizeMB}MB");
         
         // 设置网络缓冲大小 (KB)
         await (player.platform as dynamic).setProperty(
@@ -86,27 +74,28 @@ mixin PlayerMixin {
         );
         
         // 针对直播流的优化设置
-        await (player.platform as dynamic).setProperty('cache-secs', '60'); // 60秒缓存
-        await (player.platform as dynamic).setProperty('cache-pause-initial', 'yes'); // 初始缓冲暂停
-        await (player.platform as dynamic).setProperty('cache-pause-restart', 'yes'); // 缓冲不足时暂停
+        await (player.platform as dynamic).setProperty('cache-secs', '60');
+        await (player.platform as dynamic).setProperty('cache-pause-initial', 'yes');
+        await (player.platform as dynamic).setProperty('cache-pause-restart', 'yes');
         
-        // 针对H.264流的优化（基于你之前的MX播放器信息）
-        await (player.platform as dynamic).setProperty('video-sync', 'audio'); // 视频同步到音频
-        await (player.platform as dynamic).setProperty('framedrop', 'yes'); // 允许丢帧
+        // 针对H.264流的优化
+        await (player.platform as dynamic).setProperty('video-sync', 'audio');
+        await (player.platform as dynamic).setProperty('framedrop', 'yes');
         
         // 网络流优化
-        await (player.platform as dynamic).setProperty('stream-buffer-size', '${bufferSizeMB * 1024}'); // 流缓冲区
-        await (player.platform as dynamic).setProperty('network-timeout', '30'); // 网络超时
+        await (player.platform as dynamic).setProperty('stream-buffer-size', '${bufferSizeMB * 1024}');
+        await (player.platform as dynamic).setProperty('network-timeout', '30');
         
         // 针对LG设备的特殊优化
         if (Platform.isAndroid) {
-          await (player.platform as dynamic).setProperty('opengl-swapinterval', '1'); // 垂直同步
-          await (player.platform as dynamic).setProperty('video-latency-hacks', 'yes'); // 减少延迟
+          await (player.platform as dynamic).setProperty('opengl-swapinterval', '1');
+          await (player.platform as dynamic).setProperty('video-latency-hacks', 'yes');
         }
         
-        Log.d("缓冲区设置已应用: ${bufferSizeMB}MB, 预读时间: ${(bufferSizeMB / 16).toDouble()}秒");
+        Log.d("缓冲区设置完成: ${bufferSizeMB}MB, 预读时间: ${(bufferSizeMB / 16).toDouble()}秒");
       } catch (e) {
         Log.w("设置缓冲区属性失败: $e");
+        // 设置失败不影响播放，继续执行
       }
     }
   }
@@ -722,7 +711,7 @@ class PlayerController extends BaseController
     initSystem();
     initStream();
     
-    // 关键修改：初始化播放器缓冲区设置
+    // 初始化播放器缓冲区设置
     initializePlayer();
     
     //设置音量
