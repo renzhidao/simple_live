@@ -1,4 +1,4 @@
-name: Android CI (auto-resolve deps)
+name: Android CI (no manual changes)
 
 on:
   workflow_dispatch:
@@ -22,41 +22,53 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Flutter
+      - name: Setup Flutter (pin exact version)
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'
+          flutter-version: '3.22.3'  # 用确定的小版本，避免漂移到 3.35.x
           cache: true
 
-      - name: Auto-resolve dependencies (no repo changes)
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Auto-resolve dependency conflicts (no repo changes)
         working-directory: simple_live_app
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "Try Strategy A: modern set (media_kit_video>=1.3, volume_controller>=3.0.2, intl=0.20.2)"
+          echo "Try Set A (modern stack: media_kit_video>=1.3 + volume_controller>=3.0.2 + intl=0.20.2)"
           cat > pubspec_overrides.yaml <<'YAML'
           dependency_overrides:
-            intl: ">=0.20.2 <0.21.0"
+            intl: "0.20.2"
             media_kit_video: ">=1.3.0 <2.0.0"
             volume_controller: ">=3.0.2 <4.0.0"
           YAML
           if flutter pub get; then
-            echo "✅ Strategy A resolved."
+            echo "✅ Using overrides Set A."
           else
-            echo "⚠️ Strategy A failed. Fallback to Strategy B: legacy set (media_kit_video<1.3, screen_brightness 0.2.x, volume_controller 2.x)"
+            echo "⚠️ Set A failed. Fallback to Set B (legacy stack: media_kit_video<1.3 + screen_brightness 0.2.x + volume_controller 2.x)."
             cat > pubspec_overrides.yaml <<'YAML'
             dependency_overrides:
-              intl: ">=0.20.2 <0.21.0"
+              intl: "0.20.2"
               media_kit_video: ">=1.2.0 <1.3.0"
               screen_brightness: ">=0.2.2+1 <0.3.0"
               volume_controller: ">=2.0.7 <3.0.0"
             YAML
             flutter pub get
           fi
-          echo "Resolved deps (first 150 lines):"
           flutter pub deps --style=compact | sed -n '1,150p' || true
 
-      - name: Build APK (release, arm64)
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build APK (arm64)
         working-directory: simple_live_app
         shell: bash
         run: |
