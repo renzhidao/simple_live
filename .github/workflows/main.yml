@@ -6,7 +6,7 @@ on:
     paths:
       - 'simple_live_app/**'
       - '.github/workflows/android_build.yml'
-  workflow_dispatch:  # 手动触发按钮
+  workflow_dispatch:
 
 jobs:
   build:
@@ -49,7 +49,7 @@ jobs:
         working-directory: simple_live_app/android
         run: |
           cat > key.properties <<'EOF'
-          storeFile=debug.keystore
+          storeFile=app/debug.keystore
           storePassword=android
           keyPassword=android
           keyAlias=androiddebugkey
@@ -69,6 +69,11 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
+
+      - name: Fix intl version to match Flutter SDK
+        working-directory: simple_live_app
+        run: |
+          flutter pub add intl:^0.20.2
 
       - name: Build APK (release, arm64)
         working-directory: simple_live_app
