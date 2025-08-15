@@ -6,7 +6,7 @@ on:
     paths:
       - 'simple_live_app/**'
       - '.github/workflows/android_build.yml'
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,68 +25,57 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.22.x'   # 固定一个稳定小版本，避免 SDK 漂移
           cache: true
 
-      - name: Flutter version
-        run: flutter --version
+      # 可选：需要带签名的 release 再启用这两步（否则会构建未签名 release）
+      # - name: Generate debug keystore
+      #   working-directory: simple_live_app/android/app
+      #   run: |
+      #     keytool -genkey -v \
+      #       -keystore debug.keystore -storetype JKS \
+      #       -alias androiddebugkey -keyalg RSA -keysize 2048 \
+      #       -validity 10000 -storepass android -keypass android \
+      #       -dname "CN=Android Debug,O=Android,C=US"
+      #
+      # - name: Setup debug signing
+      #   working-directory: simple_live_app/android
+      #   run: |
+      #     cat > key.properties <<'EOF'
+      #     storeFile=app/debug.keystore
+      #     storePassword=android
+      #     keyPassword=android
+      #     keyAlias=androiddebugkey
+      #     EOF
 
-      - name: Generate debug keystore
-        working-directory: simple_live_app/android/app
-        run: |
-          keytool -genkey -v \
-            -keystore debug.keystore \
-            -storetype JKS \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass android \
-            -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
-
-      - name: Setup debug signing
-        working-directory: simple_live_app/android
-        run: |
-          cat > key.properties <<'EOF'
-          storeFile=app/debug.keystore
-          storePassword=android
-          keyPassword=android
-          keyAlias=androiddebugkey
-          EOF
-
-      - name: Ensure Android SDK path
-        working-directory: simple_live_app/android
-        run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: Override intl version (CI only)
+      - name: Apply CI dependency overrides
         working-directory: simple_live_app
         run: |
+          # 在 CI 中覆盖冲突依赖版本（不改仓库）
+          # 1) intl 与 flutter_localizations 对齐到 0.20.2
+          # 2) media_kit_video >=1.3.0（>=1.3 才不依赖旧版 screen_brightness 0.2.x）
           cat > pubspec_overrides.yaml <<'YAML'
           dependency_overrides:
             intl: 0.20.2
+            media_kit_video: ">=1.3.0 <2.0.0"
           YAML
           echo "pubspec_overrides.yaml created:"
           cat pubspec_overrides.yaml
 
       - name: Fetch packages
         working-directory: simple_live_app
-        run: flutter pub get
+        run: |
+          set -e
+          flutter pub get
+          echo "Resolved dependencies:"
+          flutter pub deps --style=compact | sed -n '1,120p' || true
 
       - name: Build APK (release, arm64)
         working-directory: simple_live_app
-        run: flutter build apk --release --target-platform android-arm64
+        run: |
+          flutter build apk --release --target-platform android-arm64
+          echo "APK outputs:"
+          find build/app/outputs -type f -name "*.apk" -printf "%p\t%k KB\n" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -95,3 +84,4 @@ jobs:
           path: |
             simple_live_app/build/app/outputs/flutter-apk/*.apk
             simple_live_app/build/app/outputs/apk/release/*.apk
+          if-no-files-found: error
