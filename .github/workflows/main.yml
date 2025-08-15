@@ -1,12 +1,12 @@
-name: Android CI
+name: Android CI (auto-resolve deps)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ master ]
     paths:
       - 'simple_live_app/**'
       - '.github/workflows/android_build.yml'
-  workflow_dispatch:
 
 jobs:
   build:
@@ -25,63 +25,74 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'   # 固定一个稳定小版本，避免 SDK 漂移
+          flutter-version: '3.22.x'
           cache: true
 
-      # 可选：需要带签名的 release 再启用这两步（否则会构建未签名 release）
-      # - name: Generate debug keystore
-      #   working-directory: simple_live_app/android/app
-      #   run: |
-      #     keytool -genkey -v \
-      #       -keystore debug.keystore -storetype JKS \
-      #       -alias androiddebugkey -keyalg RSA -keysize 2048 \
-      #       -validity 10000 -storepass android -keypass android \
-      #       -dname "CN=Android Debug,O=Android,C=US"
-      #
-      # - name: Setup debug signing
-      #   working-directory: simple_live_app/android
-      #   run: |
-      #     cat > key.properties <<'EOF'
-      #     storeFile=app/debug.keystore
-      #     storePassword=android
-      #     keyPassword=android
-      #     keyAlias=androiddebugkey
-      #     EOF
-
-      - name: Apply CI dependency overrides
+      - name: Auto-resolve dependencies (no repo changes)
         working-directory: simple_live_app
+        shell: bash
         run: |
-          # 在 CI 中覆盖冲突依赖版本（不改仓库）
-          # 1) intl 与 flutter_localizations 对齐到 0.20.2
-          # 2) media_kit_video >=1.3.0（>=1.3 才不依赖旧版 screen_brightness 0.2.x）
+          set -Eeuo pipefail
+          echo "Try Strategy A: modern set (media_kit_video>=1.3, volume_controller>=3.0.2, intl=0.20.2)"
           cat > pubspec_overrides.yaml <<'YAML'
           dependency_overrides:
-            intl: 0.20.2
+            intl: ">=0.20.2 <0.21.0"
             media_kit_video: ">=1.3.0 <2.0.0"
+            volume_controller: ">=3.0.2 <4.0.0"
           YAML
-          echo "pubspec_overrides.yaml created:"
-          cat pubspec_overrides.yaml
-
-      - name: Fetch packages
-        working-directory: simple_live_app
-        run: |
-          set -e
-          flutter pub get
-          echo "Resolved dependencies:"
-          flutter pub deps --style=compact | sed -n '1,120p' || true
+          if flutter pub get; then
+            echo "✅ Strategy A resolved."
+          else
+            echo "⚠️ Strategy A failed. Fallback to Strategy B: legacy set (media_kit_video<1.3, screen_brightness 0.2.x, volume_controller 2.x)"
+            cat > pubspec_overrides.yaml <<'YAML'
+            dependency_overrides:
+              intl: ">=0.20.2 <0.21.0"
+              media_kit_video: ">=1.2.0 <1.3.0"
+              screen_brightness: ">=0.2.2+1 <0.3.0"
+              volume_controller: ">=2.0.7 <3.0.0"
+            YAML
+            flutter pub get
+          fi
+          echo "Resolved deps (first 150 lines):"
+          flutter pub deps --style=compact | sed -n '1,150p' || true
 
       - name: Build APK (release, arm64)
         working-directory: simple_live_app
+        shell: bash
         run: |
+          set -Eeuo pipefail
           flutter build apk --release --target-platform android-arm64
-          echo "APK outputs:"
+          echo "🔍 APK outputs:"
           find build/app/outputs -type f -name "*.apk" -printf "%p\t%k KB\n" || true
+
+      - name: Collect artifact
+        working-directory: simple_live_app
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          APK=""
+          if [[ -f build/app/outputs/flutter-apk/app-release.apk ]]; then
+            APK="build/app/outputs/flutter-apk/app-release.apk"
+          elif [[ -f build/app/outputs/apk/release/app-release.apk ]]; then
+            APK="build/app/outputs/apk/release/app-release.apk"
+          else
+            APK=$(find build/app/outputs -type f -name "*release*.apk" | head -n 1 || true)
+          fi
+          if [[ -z "${APK}" ]]; then
+            echo "❌ 没找到 release APK"; exit 1
+          fi
+          mkdir -p ../download
+          cp "${APK}" ../download/simple-live-arm64.apk
+          cp pubspec_overrides.yaml ../download/pubspec_overrides.used.yaml || true
+          cp pubspec.lock ../download/pubspec.lock || true
+          ls -lh ../download/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: simple-live-arm64
           path: |
-            simple_live_app/build/app/outputs/flutter-apk/*.apk
-            simple_live_app/build/app/outputs/apk/release/*.apk
+            download/simple-live-arm64.apk
+            download/pubspec_overrides.used.yaml
+            download/pubspec.lock
           if-no-files-found: error
