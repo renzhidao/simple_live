@@ -6,62 +6,80 @@ on:
     paths:
       - 'simple_live_app/**'
       - '.github/workflows/android_build.yml'
+  workflow_dispatch:  # 手动触发按钮
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 11
-      uses: actions/setup-java@v3
-      with:
-        java-version: '11'
-        distribution: 'temurin'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-    - name: Generate debug keystore
-      run: |
-        keytool -genkey -v \
-          -keystore debug.keystore \
-          -alias androiddebugkey \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -storepass android \
-          -keypass android \
-          -dname "CN=Android Debug,O=Android,C=US"
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: stable
+      - name: Generate debug keystore
+        working-directory: simple_live_app/android/app
+        run: |
+          keytool -genkey -v \
+            -keystore debug.keystore \
+            -storetype JKS \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-    - name: Setup debug signing
-      run: |
-        echo "storeFile=debug.keystore" > simple_live_app/android/key.properties
-        echo "storePassword=android" >> simple_live_app/android/key.properties
-        echo "keyPassword=android" >> simple_live_app/android/key.properties
-        echo "keyAlias=androiddebugkey" >> simple_live_app/android/key.properties
+      - name: Setup debug signing
+        working-directory: simple_live_app/android
+        run: |
+          cat > key.properties <<'EOF'
+          storeFile=debug.keystore
+          storePassword=android
+          keyPassword=android
+          keyAlias=androiddebugkey
+          EOF
 
-    - name: Gradle cache
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          gradle-${{ runner.os }}-
+      - name: Ensure Android SDK path
+        working-directory: simple_live_app/android
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
-    - name: Build APK
-      run: |
-        flutter pub get
-        flutter build apk --release --target-platform android-arm64
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-apk
-        path: build/app/outputs/apk/release/app-release.apk
+      - name: Build APK (release, arm64)
+        working-directory: simple_live_app
+        run: |
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: |
+            simple_live_app/build/app/outputs/flutter-apk/*.apk
+            simple_live_app/build/app/outputs/apk/release/*.apk
